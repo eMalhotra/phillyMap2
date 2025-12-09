@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZIP Count Map</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: sans-serif;
+    }
+
+    #map-container {
+      width: 30vw;
+      height: 75vh;
+      background-color: #ffffff;
+      position: relative;
+    }
+
+    /* Buttons */
+    #controls {
+      position: absolute;
+      left: 20px;
+      top: 20px;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    #controls button {
+      padding: 6px 10px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    /* Tooltip */
+    .tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: rgba(255,255,255,0.9);
+      border: 1px solid #999;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+<!-- BUTTONS -->
+<div id="controls">
+  <button id="btnCount">Count Fill</button>
+  <button id="btnPercent">Percentage Fill</button>
+  <button id="btnTogglePoints">Toggle Polling Places</button>
+  <button id="btnDistricts">Toggle District Map</button>
+</div>
+
+<div id="map-container">
+  <div class="tooltip" id="tooltip"></div>
+</div>
+
+<script>
+
+// =====================================================================
+// 1. LOAD CSV (ZIP + counts + percentage)
+// =====================================================================
+d3.csv("userPopData.csv").then(csvData => {
+
+  const zipCountMap = {};
+  const zipPercentMap = {};
+
+  csvData.forEach(d => {
+    const zip = d.ZIP?.trim();
+    const count = +d.userCount;
+    const pct = +d.userPercentage;
+
+    if (zip) {
+      zipCountMap[zip] = !isNaN(count) ? count : null;
+      zipPercentMap[zip] = !isNaN(pct) ? pct : null;
+    }
+  });
+
+  // Color scales
+  const countExtent = d3.extent(csvData, d => +d.userCount);
+  const pctExtent = d3.extent(csvData, d => +d.userPercentage);
+
+  const countColor = d3.scaleLinear().domain(countExtent).range(["white", "#03387f"]);
+  const percentColor = d3.scaleLinear().domain(pctExtent).range(["white", "#ee2c49"]);
+
+  const tooltip = d3.select("#tooltip");
+
+  let pollingPlacesVisible = false;
+
+  // =====================================================================
+  // 2. LOAD ZIP GEOJSON
+  // =====================================================================
+  d3.json("zipMapPhilly.geojson").then(mapData => {
+
+    mapData.features.forEach(f => {
+      const zip = f.properties.CODE?.trim();
+      f.properties.count = zipCountMap[zip] ?? null;
+      f.properties.percent = zipPercentMap[zip] ?? null;
+    });
+
+    // =====================================================================
+    // 3. DRAW MAP
+    // =====================================================================
+    const container = document.getElementById("map-container");
+    const svgWidth = container.clientWidth;
+    const svgHeight = container.clientHeight;
+
+    const projection = d3.geoMercator().fitSize([svgWidth, svgHeight], mapData);
+    const path = d3.geoPath().projection(projection);
+
+    const svg = d3.select("#map-container").append("svg")
+      .attr("width", svgWidth)
+      .attr("height", svgHeight);
+
+    let districtsVisible = false;
+    let districtsLayer = null;
+    let countMode = false;
+    let percentMode = false;
+
+    // ------------------- Initial state -------------------
+    // Outline-only map, no legend, no toggles
+    countMode = false;
+    percentMode = false;
+    districtsVisible = false;
+
+    // Draw ZIP paths
+    const zipPaths = svg.selectAll("path.zip")
+      .data(mapData.features)
+      .enter().append("path")
+      .attr("class", "zip")
+      .attr("d", path)
+      .attr("fill", "white")
+      .attr("stroke", "lightgray")
+      .attr("stroke-width", 1)
+      .on("mousemove", (event, d) => {
+        tooltip
+          .style("display", "block")
+          .style("left", (event.offsetX + 15) + "px")
+          .style("top", (event.offsetY + 15) + "px")
+          .html(`
+            <strong>ZIP:</strong> ${d.properties.CODE}<br>
+            <strong>Count:</strong> ${d.properties.count ?? "No data"}<br>
+            <strong>Percent:</strong> ${d.properties.percent ?? "No data"}
+          `);
+      })
+      .on("mouseleave", () => tooltip.style("display", "none"));
+
+    // =====================================================================
+    // 4. LEGEND
+    // =====================================================================
+    const legendGroup = svg.append("g")
+      .attr("class", "legend-group")
+      .attr("transform", `translate(20, ${svgHeight - 40})`);
+
+    const defs = svg.append("defs");
+    const gradient = defs.append("linearGradient").attr("id", "legendGradient");
+
+    function setLegendGradient(colorEnd) {
+      gradient.selectAll("*").remove();
+      gradient.append("stop").attr("offset", "0%").attr("stop-color", "white");
+      gradient.append("stop").attr("offset", "100%").attr("stop-color", colorEnd);
+    }
+
+    const legendRect = legendGroup.append("rect")
+      .attr("width", 300)
+      .attr("height", 12)
+      .style("fill", "url(#legendGradient)")
+      .style("stroke", "black")
+      .style("stroke-width", 1);
+
+    const legendMin = legendGroup.append("text")
+      .attr("x", 0)
+      .attr("y", 24)
+      .attr("font-size", 12);
+
+    const legendMax = legendGroup.append("text")
+      .attr("x", 300)
+      .attr("y", 24)
+      .attr("font-size", 12)
+      .attr("text-anchor", "end");
+
+    function updateLegend(min, max) {
+      legendMin.text(min);
+      legendMax.text(max);
+    }
+
+    function removeLegend() {
+      legendMin.text("");
+      legendMax.text("");
+      gradient.selectAll("stop").remove();
+    }
+
+    // =====================================================================
+    // 5. POLLING PLACES
+    // =====================================================================
+    d3.json("polling_places.geojson").then(pointData => {
+
+      const polling = svg.selectAll(".polling-place")
+        .data(pointData.features)
+        .enter().append("circle")
+        .attr("class", "polling-place")
+        .attr("cx", d => projection(d.geometry.coordinates)[0])
+        .attr("cy", d => projection(d.geometry.coordinates)[1])
+        .attr("r", 2)
+        .attr("fill", "blue")
+        .attr("opacity", 0.9);
+
+      // HIDE polling points initially
+      polling.style("display", "none");
+
+      // ------------------ BUTTON ACTIVE STYLE ------------------
+      function setActiveButton(buttonId, isActive) {
+        const btn = document.getElementById(buttonId);
+        if (isActive) {
+          btn.style.border = "2px solid black";
+          btn.style.fontWeight = "bold";
+        } else {
+          btn.style.border = "";
+          btn.style.fontWeight = "normal";
+        }
+      }
+
+      // ------------------ BUTTON LOGIC ------------------
+
+      // Count fill button
+document.getElementById("btnCount").onclick = () => {
+  countMode = !countMode;
+  percentMode = false;
+  setActiveButton("btnCount", countMode);
+  setActiveButton("btnPercent", false);
+
+  if (countMode) {
+    zipPaths
+      .attr("stroke", "black")
+      .attr("fill", d => {
+        const c = d.properties.count;
+        return c != null ? countColor(c) : "#ddd";
+      });
+    setLegendGradient("#03387f");
+    updateLegend(countExtent[0], countExtent[1]);
+  } else {
+    zipPaths
+      .attr("fill", "white")
+      .attr("stroke", "lightgray");
+    removeLegend();
+  }
+};
+
+// Percentage fill button
+document.getElementById("btnPercent").onclick = () => {
+  percentMode = !percentMode;
+  countMode = false;
+  setActiveButton("btnPercent", percentMode);
+  setActiveButton("btnCount", false);
+
+  if (percentMode) {
+    zipPaths
+      .attr("stroke", "black")
+      .attr("fill", d => {
+        const p = d.properties.percent;
+        return p != null ? percentColor(p) : "#ddd";
+      });
+    setLegendGradient("#ee2c49");
+    updateLegend(pctExtent[0], pctExtent[1]);
+  } else {
+    zipPaths
+      .attr("fill", "white")
+      .attr("stroke", "lightgray");
+    removeLegend();
+  }
+};
+
+// Toggle polling places
+document.getElementById("btnTogglePoints").onclick = () => {
+  pollingPlacesVisible = !pollingPlacesVisible;
+  polling.style("display", pollingPlacesVisible ? "block" : "none");
+
+  if (pollingPlacesVisible) {
+    // Bring to front so they appear above ZIP paths and district overlay
+    polling.each(function() {
+      this.parentNode.appendChild(this);
+    });
+  }
+    setActiveButton("btnTogglePoints", pollingPlacesVisible);
+
+};
+
+
+// District overlay button
+document.getElementById("btnDistricts").onclick = () => {
+  districtsVisible = !districtsVisible;
+  setActiveButton("btnDistricts", districtsVisible);
+
+  if (districtsVisible) {
+    // Draw district overlay on top
+    d3.json("districts.geojson").then(districtData => {
+      if (districtsLayer) districtsLayer.remove();
+      districtsLayer = svg.append("g")
+        .attr("class", "district-overlay")
+        .selectAll("path")
+        .data(districtData.features)
+        .enter().append("path")
+        .attr("d", path)
+        .attr("fill", "none")
+        .attr("stroke", "black")
+        .attr("stroke-width", 2)
+        .attr("pointer-events", "none");
+    });
+  } else {
+    if (districtsLayer) districtsLayer.remove();
+    districtsLayer = null;
+    // Do not reset count/percent fills — leave them as-is
+  }
+};
+
+
+    }); // end polling points
+
+  }); // end ZIP geojson
+
+}); // end CSV
+
+</script>
+
+</body>
+</html>
