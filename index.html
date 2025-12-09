@@ -328,62 +328,41 @@ document.getElementById("btnDistricts").onclick = () => {
   }
 
  // Overlay 2 button
-document.getElementById("btnWards").onclick = () => {
-  overlay2Visible = !overlay2Visible;
-  setActiveButton("btnWards", overlay2Visible);
+// ---- build lookup ----
+const turnoutMap = {};
+turnoutData.forEach(d => {
+  const ward = d.ward.padStart(2, "0"); // match GeoJSON
+  turnoutMap[ward] = +d.turnout;
+});
 
-  if (overlay2Visible) {
+// ---- attach to geojson ----
+wardData.features.forEach(f => {
+  const w = f.properties.ward.padStart(2, "0");  // match CSV
+  f.properties.turnout = turnoutMap[w] ?? null;
+});
 
-    Promise.all([
-      d3.json("wards.geojson"),
-      d3.csv("election_turnout_ward.csv")
-    ]).then(([wardData, turnoutData]) => {
+// ---- scale ----
+const extent = d3.extent(wardData.features.filter(d => d.properties.turnout != null), d => d.properties.turnout);
+const color = d3.scaleLinear()
+  .domain(extent)
+  .range(["white", "black"]);
 
-      if (overlay2Layer) overlay2Layer.remove();
-
-      // ---- build lookup ----
-      const turnoutMap = {};
-      turnoutData.forEach(d => {
-        const ward = +d.ward;   // convert "01" → 1, "08" → 8
-        const turnout = +d.turnout;
-        turnoutMap[ward] = turnout;
-      });
-
-      // ---- attach to geojson ----
-      wardData.features.forEach(f => {
-        const w = +f.properties.ward;  // ensure numeric
-        f.properties.turnout = turnoutMap[w] ?? null;
-      });
-
-      // ---- scale ----
-      const extent = d3.extent(wardData.features, d => d.properties.turnout);
-      const color = d3.scaleLinear()
-        .domain(extent)
-        .range(["white", "black"]);
-
-      // ---- draw layer ----
-      overlay2Layer = svg.append("g")
-        .attr("class", "overlay2")
-        .selectAll("path")
-        .data(wardData.features)
-        .enter().append("path")
-        .attr("d", path)
-        .attr("fill", d => {
-          const t = d.properties.turnout;
-          return t != null ? color(t) : "gray";
-        })
-        .attr("fill-opacity", 0.5)
-        .attr("stroke", "black")
-        .attr("stroke-width", 1.5);
-    });
-
-  } else {
-    if (overlay2Layer) overlay2Layer.remove();
-    overlay2Layer = null;
-  }
+// ---- draw layer ----
+overlay2Layer = svg.append("g")
+  .attr("class", "overlay2")
+  .selectAll("path")
+  .data(wardData.features)
+  .enter().append("path")
+  .attr("d", path)
+  .attr("fill", d => {
+    const t = d.properties.turnout;
+    return t != null ? color(t) : "gray";
+  })
+  .attr("fill-opacity", 0.5)
+  .attr("stroke", "black")
+  .attr("stroke-width", 1.5);
 };
 
-};
 
 
     }); // end polling points
